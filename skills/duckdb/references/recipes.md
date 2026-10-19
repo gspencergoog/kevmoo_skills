@@ -440,8 +440,8 @@ SELECT count(*) FROM 'massive_dataset/*.parquet';
 
 Use [`../scripts/diff_macros.sql`](../scripts/diff_macros.sql) to query unified
 diffs with SQL. Use `rg` for single-pattern text searches in a working tree, and
-use DuckDB for multi-condition filters, aggregations, and AST range joins on
-diffs.
+use DuckDB for multi-condition filters and aggregations across diff lines and
+hunks.
 
 ### Recipe 8.1: Query Raw Unified Diffs via Standard Input
 
@@ -459,46 +459,22 @@ WHERE op = '+'
 "
 ```
 
-### Recipe 8.2: Query Staged Review Directories (`diff_lines.jsonl` & `diff_entities.jsonl`)
+### Recipe 8.2: Summarize Hunk Churn Across Files (`read_diff_hunks`)
 
-When a diff-staging step emits `diff_lines.jsonl`, `diff_hunks.jsonl`, and
-`diff_entities.jsonl` into a staging directory (for example `staged_diff`), run
-relational queries against that directory with `diff_macros.sql`:
+Aggregate hunk counts, added lines, and deleted lines per file or function
+context header across a branch diff:
 
 ```bash
-duckdb -batch -dark-mode -box \
+git diff main...HEAD | duckdb -batch -dark-mode -box \
   -init skills/duckdb/scripts/diff_macros.sql -c "
--- 1. Top modified functions and methods ranked by lines added and rewrite %
-SELECT file_path, kind, name, chunk_name, lines_added, pct_rewritten
-FROM diff_entity_churn('staged_diff')
+SELECT
+  file_path,
+  count(*) AS hunks,
+  sum(added_lines) AS lines_added,
+  sum(deleted_lines) AS lines_deleted
+FROM read_diff_hunks('/dev/stdin')
+GROUP BY file_path
+ORDER BY (sum(added_lines) + sum(deleted_lines)) DESC
 LIMIT 15;
-
--- 2. Public or internal functions whose signature changed between OLD and NEW
-SELECT file_path, kind, name, old_signature, new_signature
-FROM diff_signature_drift('staged_diff');
-
--- 3. Modified production functions not referenced in any test diff
-SELECT file_path, kind, name, chunk_name, lines_added
-FROM diff_untested_functions('staged_diff');
-"
-```
-
-### Recipe 8.3: Find Deleted Symbols (`ANTI JOIN`)
-
-Find symbols that existed in `OLD` (`--base-ref`) and were removed from `NEW`
-without a matching replacement in the same file:
-
-```bash
-duckdb -batch -dark-mode -box \
-  -init skills/duckdb/scripts/diff_macros.sql -c "
-SELECT o.file_path, o.kind, o.name, o.signature, o.line_start AS old_line
-FROM staged_diff_entities('staged_diff') o
-ANTI JOIN staged_diff_entities('staged_diff') n
-  ON o.file_path = n.file_path
- AND o.kind = n.kind
- AND o.name = n.name
- AND n.side = 'NEW'
-WHERE o.side = 'OLD'
-ORDER BY o.file_path, o.line_start;
 "
 ```

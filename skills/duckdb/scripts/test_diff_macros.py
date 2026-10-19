@@ -27,14 +27,6 @@ def _find_duckdb() -> str | None:
     return None
 
 
-def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    """Writes a list of dicts to a newline-delimited JSON file."""
-    path.write_text(
-        "".join(json.dumps(row) + "\n" for row in rows),
-        encoding="utf-8",
-    )
-
-
 DUCKDB_BIN = _find_duckdb()
 
 
@@ -66,7 +58,7 @@ class TestDiffMacros(unittest.TestCase):
         out = res.stdout.strip()
         return json.loads(out) if out else []
 
-    def test_raw_and_staged_diff_parity(self) -> None:
+    def test_read_diff_lines_and_hunks(self) -> None:
         diff_content = (
             "diff --git a/src/service.py b/src/service.py\n"
             "index 1111111..2222222 100644\n"
@@ -88,14 +80,15 @@ class TestDiffMacros(unittest.TestCase):
         raw_diff_path = Path(self.test_dir) / "sample.diff"
         raw_diff_path.write_text(diff_content, encoding="utf-8")
 
-        stage_dir = Path(self.test_dir) / "staged"
-        stage_dir.mkdir(parents=True)
-        _write_jsonl(
-            stage_dir / "diff_lines.jsonl",
+        raw_lines = self._query(
+            f"SELECT file_path, hunk_id, func_context, op, old_line, new_line, content "
+            f"FROM read_diff_lines('{raw_diff_path}');"
+        )
+        self.assertEqual(
+            raw_lines,
             [
                 {
                     "file_path": "src/service.py",
-                    "chunk_name": "diff_chunk_01.diff",
                     "hunk_id": 1,
                     "func_context": "def process():",
                     "op": " ",
@@ -105,7 +98,6 @@ class TestDiffMacros(unittest.TestCase):
                 },
                 {
                     "file_path": "src/service.py",
-                    "chunk_name": "diff_chunk_01.diff",
                     "hunk_id": 1,
                     "func_context": "def process():",
                     "op": "-",
@@ -115,7 +107,6 @@ class TestDiffMacros(unittest.TestCase):
                 },
                 {
                     "file_path": "src/service.py",
-                    "chunk_name": "diff_chunk_01.diff",
                     "hunk_id": 1,
                     "func_context": "def process():",
                     "op": "+",
@@ -125,7 +116,6 @@ class TestDiffMacros(unittest.TestCase):
                 },
                 {
                     "file_path": "src/service.py",
-                    "chunk_name": "diff_chunk_01.diff",
                     "hunk_id": 1,
                     "func_context": "def process():",
                     "op": "+",
@@ -135,7 +125,6 @@ class TestDiffMacros(unittest.TestCase):
                 },
                 {
                     "file_path": "src/service.py",
-                    "chunk_name": "diff_chunk_01.diff",
                     "hunk_id": 1,
                     "func_context": "def process():",
                     "op": " ",
@@ -145,7 +134,6 @@ class TestDiffMacros(unittest.TestCase):
                 },
                 {
                     "file_path": "tests/test_service.py",
-                    "chunk_name": "diff_chunk_01.diff",
                     "hunk_id": 2,
                     "func_context": "",
                     "op": " ",
@@ -155,7 +143,6 @@ class TestDiffMacros(unittest.TestCase):
                 },
                 {
                     "file_path": "tests/test_service.py",
-                    "chunk_name": "diff_chunk_01.diff",
                     "hunk_id": 2,
                     "func_context": "",
                     "op": "+",
@@ -165,12 +152,17 @@ class TestDiffMacros(unittest.TestCase):
                 },
             ],
         )
-        _write_jsonl(
-            stage_dir / "diff_hunks.jsonl",
+
+        raw_hunks = self._query(
+            f"SELECT file_path, hunk_id, old_start, old_count, new_start, new_count, "
+            f"func_context, added_lines, deleted_lines "
+            f"FROM read_diff_hunks('{raw_diff_path}');"
+        )
+        self.assertEqual(
+            raw_hunks,
             [
                 {
                     "file_path": "src/service.py",
-                    "chunk_name": "diff_chunk_01.diff",
                     "hunk_id": 1,
                     "old_start": 10,
                     "old_count": 3,
@@ -182,7 +174,6 @@ class TestDiffMacros(unittest.TestCase):
                 },
                 {
                     "file_path": "tests/test_service.py",
-                    "chunk_name": "diff_chunk_01.diff",
                     "hunk_id": 2,
                     "old_start": 1,
                     "old_count": 1,
@@ -194,179 +185,135 @@ class TestDiffMacros(unittest.TestCase):
                 },
             ],
         )
-        _write_jsonl(stage_dir / "diff_entities.jsonl", [])
 
-        raw_lines = self._query(
-            f"SELECT file_path, hunk_id, func_context, op, old_line, new_line, content "
+    def test_sql_comment_and_plusplus_lines_inside_hunks(self) -> None:
+        diff_content = (
+            "diff --git a/schema.sql b/schema.sql\n"
+            "--- a/schema.sql\n"
+            "+++ b/schema.sql\n"
+            "@@ -1,3 +1,3 @@\n"
+            "--- old sql comment\n"
+            "+-- new sql comment\n"
+            "+++ counter_note\n"
+            "--- a/fake_header_inside_hunk\n"
+            " SELECT 1;\n"
+        )
+        raw_diff_path = Path(self.test_dir) / "comments.diff"
+        raw_diff_path.write_text(diff_content, encoding="utf-8")
+
+        lines = self._query(
+            f"SELECT file_path, hunk_id, op, old_line, new_line, content "
             f"FROM read_diff_lines('{raw_diff_path}');"
         )
-        staged_lines = self._query(
-            f"SELECT file_path, hunk_id, func_context, op, old_line, new_line, content "
-            f"FROM staged_diff_lines('{stage_dir}');"
-        )
-        self.assertEqual(raw_lines, staged_lines)
-
-        raw_hunks = self._query(
-            f"SELECT file_path, hunk_id, old_start, old_count, new_start, new_count, "
-            f"func_context, added_lines, deleted_lines "
-            f"FROM read_diff_hunks('{raw_diff_path}');"
-        )
-        staged_hunks = self._query(
-            f"SELECT file_path, hunk_id, old_start, old_count, new_start, new_count, "
-            f"func_context, added_lines, deleted_lines "
-            f"FROM staged_diff_hunks('{stage_dir}');"
-        )
-        self.assertEqual(raw_hunks, staged_hunks)
-
-    def test_entity_churn_signature_drift_and_untested_functions(self) -> None:
-        stage_dir = Path(self.test_dir) / "staged_entities"
-        stage_dir.mkdir(parents=True)
-        _write_jsonl(
-            stage_dir / "diff_lines.jsonl",
+        self.assertEqual(
+            lines,
             [
                 {
-                    "file_path": "src/worker.py",
-                    "chunk_name": "diff_chunk_01.diff",
+                    "file_path": "schema.sql",
                     "hunk_id": 1,
-                    "func_context": "class Worker:",
+                    "op": "-",
+                    "old_line": 1,
+                    "new_line": None,
+                    "content": "-- old sql comment",
+                },
+                {
+                    "file_path": "schema.sql",
+                    "hunk_id": 1,
+                    "op": "+",
+                    "old_line": None,
+                    "new_line": 1,
+                    "content": "-- new sql comment",
+                },
+                {
+                    "file_path": "schema.sql",
+                    "hunk_id": 1,
                     "op": "+",
                     "old_line": None,
                     "new_line": 2,
-                    "content": (
-                        "    def tested_method(self, count: int, strict: bool=False) -> bool:"
-                    ),
+                    "content": "++ counter_note",
                 },
                 {
-                    "file_path": "src/worker.py",
-                    "chunk_name": "diff_chunk_01.diff",
+                    "file_path": "schema.sql",
                     "hunk_id": 1,
-                    "func_context": "class Worker:",
-                    "op": "+",
-                    "old_line": None,
+                    "op": "-",
+                    "old_line": 2,
+                    "new_line": None,
+                    "content": "-- a/fake_header_inside_hunk",
+                },
+                {
+                    "file_path": "schema.sql",
+                    "hunk_id": 1,
+                    "op": " ",
+                    "old_line": 3,
                     "new_line": 3,
-                    "content": "        x = count + 1",
-                },
-                {
-                    "file_path": "src/worker.py",
-                    "chunk_name": "diff_chunk_01.diff",
-                    "hunk_id": 1,
-                    "func_context": "class Worker:",
-                    "op": "+",
-                    "old_line": None,
-                    "new_line": 4,
-                    "content": "        return x > 0",
-                },
-                {
-                    "file_path": "src/worker.py",
-                    "chunk_name": "diff_chunk_01.diff",
-                    "hunk_id": 1,
-                    "func_context": "class Worker:",
-                    "op": "+",
-                    "old_line": None,
-                    "new_line": 7,
-                    "content": "        cleaned = label.strip()",
-                },
-                {
-                    "file_path": "src/worker.py",
-                    "chunk_name": "diff_chunk_01.diff",
-                    "hunk_id": 1,
-                    "func_context": "class Worker:",
-                    "op": "+",
-                    "old_line": None,
-                    "new_line": 8,
-                    "content": "        return cleaned.upper()",
-                },
-                {
-                    "file_path": "tests/test_worker.py",
-                    "chunk_name": "diff_chunk_01.diff",
-                    "hunk_id": 2,
-                    "func_context": "def test_worker():",
-                    "op": "+",
-                    "old_line": None,
-                    "new_line": 2,
-                    "content": "    assert tested_method(1, strict=True)",
+                    "content": "SELECT 1;",
                 },
             ],
         )
-        _write_jsonl(stage_dir / "diff_hunks.jsonl", [])
-        _write_jsonl(
-            stage_dir / "diff_entities.jsonl",
+
+        hunks = self._query(
+            f"SELECT file_path, added_lines, deleted_lines FROM read_diff_hunks('{raw_diff_path}');"
+        )
+        self.assertEqual(
+            hunks,
             [
                 {
-                    "file_path": "src/worker.py",
-                    "side": "NEW",
-                    "kind": "class",
-                    "name": "Worker",
-                    "signature": "class Worker",
-                    "line_start": 1,
-                    "line_end": 8,
-                },
-                {
-                    "file_path": "src/worker.py",
-                    "side": "NEW",
-                    "kind": "method",
-                    "name": "tested_method",
-                    "signature": "def tested_method(self, count: int, strict: bool=False) -> bool",
-                    "line_start": 2,
-                    "line_end": 4,
-                },
-                {
-                    "file_path": "src/worker.py",
-                    "side": "NEW",
-                    "kind": "method",
-                    "name": "untested_method",
-                    "signature": "def untested_method(self, label: str) -> str",
-                    "line_start": 6,
-                    "line_end": 8,
-                },
-                {
-                    "file_path": "src/worker.py",
-                    "side": "OLD",
-                    "kind": "method",
-                    "name": "tested_method",
-                    "signature": "def tested_method(self, count: int) -> bool",
-                    "line_start": 2,
-                    "line_end": 3,
-                },
-                {
-                    "file_path": "src/worker.py",
-                    "side": "OLD",
-                    "kind": "method",
-                    "name": "untested_method",
-                    "signature": "def untested_method(self, label: str) -> str",
-                    "line_start": 5,
-                    "line_end": 6,
-                },
+                    "file_path": "schema.sql",
+                    "added_lines": 2,
+                    "deleted_lines": 2,
+                }
             ],
         )
 
-        churn = self._query(f"SELECT * FROM diff_entity_churn('{stage_dir}');")
-        churn_by_name = {r["name"]: r for r in churn}
-        self.assertIn("tested_method", churn_by_name)
-        self.assertIn("untested_method", churn_by_name)
-        self.assertNotIn("Worker", churn_by_name)
-        self.assertEqual(churn_by_name["tested_method"]["lines_added"], 3)
-        self.assertEqual(churn_by_name["untested_method"]["lines_added"], 2)
+    def test_new_and_deleted_files(self) -> None:
+        diff_content = (
+            "diff --git a/src/old.py b/src/old.py\n"
+            "deleted file mode 100644\n"
+            "--- a/src/old.py\n"
+            "+++ /dev/null\n"
+            "@@ -1,2 +0,0 @@\n"
+            "-line_a\n"
+            "-line_b\n"
+            "diff --git a/src/new.py b/src/new.py\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            "+++ b/src/new.py\n"
+            "@@ -0,0 +1,1 @@\n"
+            "+created_line\n"
+        )
+        raw_diff_path = Path(self.test_dir) / "new_del.diff"
+        raw_diff_path.write_text(diff_content, encoding="utf-8")
 
-        drift = self._query(f"SELECT * FROM diff_signature_drift('{stage_dir}');")
-        self.assertEqual(len(drift), 1)
-        self.assertEqual(drift[0]["name"], "tested_method")
-        self.assertIn("strict: bool=False", drift[0]["new_signature"])
-
-        untested = self._query(f"SELECT * FROM diff_untested_functions('{stage_dir}');")
-        self.assertEqual([r["name"] for r in untested], ["untested_method"])
-
-    def test_empty_entities_jsonl_returns_zero_rows_cleanly(self) -> None:
-        stage_dir = Path(self.test_dir) / "staged_no_entities"
-        stage_dir.mkdir(parents=True)
-        _write_jsonl(stage_dir / "diff_lines.jsonl", [])
-        _write_jsonl(stage_dir / "diff_hunks.jsonl", [])
-        _write_jsonl(stage_dir / "diff_entities.jsonl", [])
-
-        self.assertEqual(self._query(f"SELECT * FROM staged_diff_entities('{stage_dir}');"), [])
-        self.assertEqual(self._query(f"SELECT * FROM diff_entity_churn('{stage_dir}');"), [])
-        self.assertEqual(self._query(f"SELECT * FROM diff_signature_drift('{stage_dir}');"), [])
-        self.assertEqual(self._query(f"SELECT * FROM diff_untested_functions('{stage_dir}');"), [])
+        lines = self._query(
+            f"SELECT file_path, op, old_line, new_line, content "
+            f"FROM read_diff_lines('{raw_diff_path}');"
+        )
+        self.assertEqual(
+            lines,
+            [
+                {
+                    "file_path": "src/old.py",
+                    "op": "-",
+                    "old_line": 1,
+                    "new_line": None,
+                    "content": "line_a",
+                },
+                {
+                    "file_path": "src/old.py",
+                    "op": "-",
+                    "old_line": 2,
+                    "new_line": None,
+                    "content": "line_b",
+                },
+                {
+                    "file_path": "src/new.py",
+                    "op": "+",
+                    "old_line": None,
+                    "new_line": 1,
+                    "content": "created_line",
+                },
+            ],
+        )
 
 
 if __name__ == "__main__":
