@@ -307,6 +307,8 @@ error, command, symbol, file, CL, or PR and join the hits with
 - Unlike `read_json('~/...')`, DuckDB's SQLite extension passes the `ATTACH`
   path directly to `sqlite3_open_v2` without `~` expansion. Use `$HOME` inside
   the double-quoted `-c "..."` string.
+- The query sits inside a double-quoted shell string. In `<search_term>`, escape
+  `\`, `$`, `` ` ``, and `"` with a backslash, and double any `'`.
 
 ```bash
 duckdb -batch -dark-mode -box -c "
@@ -558,9 +560,10 @@ Markdown sections and fenced code blocks with SQL.
   Query `read_md_sections` (`~70 ms`) to get the section outline and
   `line_start..subtree_line_end` span, then pass those bounds to `read_file`.
 - Multi-file corpus (`10+` files): Query `read_md_sections('**/*.md')` or
-  `read_md_code_blocks('**/*.md')`. The macro tracks nested 3-, 4-, and
-  5-backtick and tilde fences so `#` comments inside code blocks are never
-  misclassified as headings.
+  `read_md_code_blocks('**/*.md')`. The macro indexes ATX (`#`) headings only
+  and tracks backtick and tilde fences by marker length, so `#` comments in
+  well-formed fences stay out of the outline. A 5+ backtick or tilde line inside
+  a shorter fence (such as an RST underline) still toggles fence state.
 
 ### Recipe 9.1: Section Outline and Subtree Line Spans (`read_md_sections`)
 
