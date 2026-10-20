@@ -167,6 +167,11 @@ class TestMarkdownMacros(unittest.TestCase):
             "# sql hash comment inside tilde block\n"
             "SELECT 1;\n"
             "~~~\n"
+            "- List item with 4-space indented fence:\n"
+            "    ```bash\n"
+            "    # indented shell comment\n"
+            "    echo list\n"
+            "    ```\n"
         )
         doc_path = Path(self.test_dir) / "fences.md"
         doc_path.write_text(md_content, encoding="utf-8")
@@ -188,7 +193,7 @@ class TestMarkdownMacros(unittest.TestCase):
                     "section_id": 2,
                     "level": 2,
                     "heading": "Templates",
-                    "own_code_blocks": 2,
+                    "own_code_blocks": 3,
                 },
             ],
         )
@@ -236,19 +241,42 @@ class TestMarkdownMacros(unittest.TestCase):
                     "code_lines": 2,
                     "code": "# sql hash comment inside tilde block\nSELECT 1;",
                 },
+                {
+                    "block_id": 4,
+                    "section_id": 2,
+                    "section_heading": "Templates",
+                    "lang": "bash",
+                    "line_start": 18,
+                    "line_end": 21,
+                    "code_lines": 2,
+                    "code": "    # indented shell comment\n    echo list",
+                },
             ],
         )
 
     def test_multi_file_glob_and_preamble_only_file(self) -> None:
         file_a = Path(self.test_dir) / "a.md"
         file_b = Path(self.test_dir) / "b.md"
+        file_c = Path(self.test_dir) / "c_large.md"
         file_a.write_text("Just plain notes without any headings.\nLine two.\n", encoding="utf-8")
         file_b.write_text("# Doc B\nSome content.\n", encoding="utf-8")
+        large_lines = [
+            "---",
+            "title: large-doc",
+            "---",
+            "# Large Doc",
+        ]
+        for idx in range(1, 25):
+            large_lines.append(f"Intro line {idx}")
+        large_lines.append("## Subheading At Line 29")
+        for idx in range(1, 25):
+            large_lines.append(f"Subheading line {idx}")
+        file_c.write_text("\n".join(large_lines) + "\n", encoding="utf-8")
 
         glob_pat = str(Path(self.test_dir) / "*.md")
         sections = self._query(
             f"SELECT regexp_extract(file_path, '[^/]+$') AS name, "
-            f"section_id, level, heading, line_start, subtree_line_end "
+            f"section_id, level, heading, line_start, line_end, subtree_line_end "
             f"FROM read_md_sections('{glob_pat}') "
             f"ORDER BY name, section_id;"
         )
@@ -261,6 +289,7 @@ class TestMarkdownMacros(unittest.TestCase):
                     "level": 0,
                     "heading": "(preamble)",
                     "line_start": 1,
+                    "line_end": 2,
                     "subtree_line_end": 2,
                 },
                 {
@@ -269,7 +298,26 @@ class TestMarkdownMacros(unittest.TestCase):
                     "level": 1,
                     "heading": "Doc B",
                     "line_start": 1,
+                    "line_end": 2,
                     "subtree_line_end": 2,
+                },
+                {
+                    "name": "c_large.md",
+                    "section_id": 1,
+                    "level": 1,
+                    "heading": "Large Doc",
+                    "line_start": 4,
+                    "line_end": 28,
+                    "subtree_line_end": 53,
+                },
+                {
+                    "name": "c_large.md",
+                    "section_id": 2,
+                    "level": 2,
+                    "heading": "Subheading At Line 29",
+                    "line_start": 29,
+                    "line_end": 53,
+                    "subtree_line_end": 53,
                 },
             ],
         )

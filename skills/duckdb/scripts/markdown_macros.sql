@@ -4,10 +4,10 @@
 -- Internal helper: Parse raw Markdown lines, strip YAML frontmatter, track
 -- nested 3/4/5-backtick and tilde code fences, and classify ATX headings.
 CREATE OR REPLACE MACRO _parse_markdown(md_glob) AS TABLE
-WITH raw_lines AS (
+WITH raw_stream AS (
   SELECT
     filename AS file_path,
-    row_number() OVER (PARTITION BY filename) AS line_num,
+    row_number() OVER () AS stream_row,
     rtrim(COALESCE(line, ''), chr(13)) AS line
   FROM read_csv(
     md_glob,
@@ -18,6 +18,13 @@ WITH raw_lines AS (
     null_padding=true,
     filename=true
   )
+),
+raw_lines AS (
+  SELECT
+    file_path,
+    row_number() OVER (PARTITION BY file_path ORDER BY stream_row) AS line_num,
+    line
+  FROM raw_stream
 ),
 frontmatter_state AS (
   SELECT
@@ -59,7 +66,7 @@ f5_marked AS (
     is_frontmatter,
     (
       NOT is_frontmatter
-      AND regexp_matches(line, '^ {0,3}(`{5,}|~{5,})[^`~]*$')
+      AND regexp_matches(line, '^[ \t]*(`{5,}|~{5,})[^`~]*$')
     ) AS is_f5
   FROM fm_filtered
 ),
@@ -84,7 +91,7 @@ f4_marked AS (
     (
       NOT is_frontmatter
       AND NOT in_f5
-      AND regexp_matches(line, '^ {0,3}(`{4}|~{4})[^`~]*$')
+      AND regexp_matches(line, '^[ \t]*(`{4}|~{4})[^`~]*$')
     ) AS is_f4
   FROM f5_state
 ),
@@ -110,7 +117,7 @@ t3_marked AS (
       NOT is_frontmatter
       AND NOT in_f5
       AND NOT in_f4
-      AND regexp_matches(line, '^ {0,3}~{3}[^~]*$')
+      AND regexp_matches(line, '^[ \t]*~{3}[^~]*$')
     ) AS is_t3
   FROM f4_state
 ),
@@ -137,7 +144,7 @@ b3_marked AS (
       AND NOT in_f5
       AND NOT in_f4
       AND NOT in_t3
-      AND regexp_matches(line, '^ {0,3}`{3}[^`]*$')
+      AND regexp_matches(line, '^[ \t]*`{3}[^`]*$')
     ) AS is_b3
   FROM t3_state
 ),
@@ -182,7 +189,7 @@ classified AS (
     END AS code_block_id,
     CASE
       WHEN is_fence_delim AND (fence_delim_count % 2 = 1) THEN
-        trim(regexp_extract(line, '^ {0,3}(?:`{3,}|~{3,})[ \t]*([^`~\s]*)', 1))
+        trim(regexp_extract(line, '^[ \t]*(?:`{3,}|~{3,})[ \t]*([^`~\s]*)', 1))
       ELSE NULL
     END AS fence_lang,
     (

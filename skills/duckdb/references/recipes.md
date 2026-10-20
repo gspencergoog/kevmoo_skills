@@ -304,10 +304,13 @@ error, command, symbol, file, CL, or PR and join the hits with
 - Columns with SQLite `TIMESTAMP` affinity (such as `last_modified_time`) must
   be formatted with `strftime(col, '%Y-%m-%d %H:%M:%S')` rather than
   `substr(col, ...)`.
+- Unlike `read_json('~/...')`, DuckDB's SQLite extension passes the `ATTACH`
+  path directly to `sqlite3_open_v2` without `~` expansion. Use `$HOME` inside
+  the double-quoted `-c "..."` string.
 
 ```bash
 duckdb -batch -dark-mode -box -c "
-ATTACH '~/.gemini/jetski/conversation_summaries.db' AS db (TYPE SQLITE, READ_ONLY);
+ATTACH '$HOME/.gemini/jetski/conversation_summaries.db' AS db (TYPE SQLITE, READ_ONLY);
 WITH hits AS (
   SELECT
     regexp_extract(filename, 'brain/([^/]+)/', 1) AS conversation_id,
