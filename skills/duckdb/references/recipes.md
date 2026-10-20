@@ -309,6 +309,9 @@ error, command, symbol, file, CL, or PR and join the hits with
   the double-quoted `-c "..."` string.
 - The query sits inside a double-quoted shell string. In `<search_term>`, escape
   `\`, `$`, `` ` ``, and `"` with a backslash, and double any `'`.
+- `CAST(tool_calls AS VARCHAR)` is serialized JSON that escapes `"` and `\` as
+  `\"` and `\\`, so terms containing either match `content` only. `ILIKE` also
+  treats `%` and `_` as wildcards.
 
 ```bash
 duckdb -batch -dark-mode -box -c "
@@ -561,9 +564,14 @@ Markdown sections and fenced code blocks with SQL.
   `line_start..subtree_line_end` span, then pass those bounds to `read_file`.
 - Multi-file corpus (`10+` files): Query `read_md_sections('**/*.md')` or
   `read_md_code_blocks('**/*.md')`. The macro indexes ATX (`#`) headings only
-  and tracks backtick and tilde fences by marker length, so `#` comments in
-  well-formed fences stay out of the outline. A 5+ backtick or tilde line inside
-  a shorter fence (such as an RST underline) still toggles fence state.
+  and tracks fenced code blocks per CommonMark (closing a fence only on a bare
+  line of the same backtick or tilde character with at least the opener's
+  length), so `#` comments and nested fences inside code blocks stay out of the
+  outline.
+- Encoding: The macros read files with `read_text`, which accepts only UTF-8.
+  One non-UTF-8 file aborts the whole query and names the file in the error;
+  re-encode it, or pass a narrower glob or a list of paths such as
+  `read_md_sections(['docs/a.md', 'docs/b.md'])`.
 
 ### Recipe 9.1: Section Outline and Subtree Line Spans (`read_md_sections`)
 
@@ -591,7 +599,8 @@ WHERE level <= 2;
 ### Recipe 9.2: Audit Fenced Code Blocks Across a Glob (`read_md_code_blocks`)
 
 Extract fenced code blocks by language tag or enclosing section across an entire
-repository:
+repository. A non-matching glob returns zero rows with exit code 0, and any
+non-UTF-8 file aborts the scan, so verify `read_md_sections` is non-empty first:
 
 ```bash
 duckdb -batch -dark-mode -box \
