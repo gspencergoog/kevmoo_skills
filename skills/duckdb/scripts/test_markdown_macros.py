@@ -44,6 +44,7 @@ class TestMarkdownMacros(unittest.TestCase):
             [
                 str(DUCKDB_BIN),
                 "-batch",
+                "-no-stdin",
                 "-dark-mode",
                 "-json",
                 "-init",
@@ -280,7 +281,11 @@ class TestMarkdownMacros(unittest.TestCase):
     ) -> None:
         doc = Path(self.test_dir) / "edge_fences.md"
         doc.write_text(
-            "# Section 1\n"
+            "\ufeff# Section 1\n"
+            "```\n"
+            "```nested_info_inside_bare_fence\n"
+            "# comment inside initial bare fence\n"
+            "```\n"
             "```rst\n"
             "Title\n"
             "~~~\n"
@@ -294,14 +299,175 @@ class TestMarkdownMacros(unittest.TestCase):
             "# Section 3\n",
             encoding="utf-8",
         )
-        sections = self._query(f"SELECT section_id, heading FROM read_md_sections('{doc}');")
+        sections = self._query(
+            f"SELECT section_id, heading, own_code_blocks FROM read_md_sections('{doc}');"
+        )
         self.assertEqual(
             sections,
             [
-                {"section_id": 1, "heading": "Section 1"},
-                {"section_id": 2, "heading": "Section 2"},
-                {"section_id": 3, "heading": "Section 3"},
+                {"section_id": 1, "heading": "Section 1", "own_code_blocks": 2},
+                {"section_id": 2, "heading": "Section 2", "own_code_blocks": 1},
+                {"section_id": 3, "heading": "Section 3", "own_code_blocks": 0},
             ],
+        )
+
+        blocks = self._query(
+            f"SELECT block_id, section_id, lang, line_start, line_end, code "
+            f"FROM read_md_code_blocks('{doc}');"
+        )
+        self.assertEqual(
+            blocks,
+            [
+                {
+                    "block_id": 1,
+                    "section_id": 1,
+                    "lang": "",
+                    "line_start": 2,
+                    "line_end": 5,
+                    "code": (
+                        "```nested_info_inside_bare_fence\n# comment inside initial bare fence"
+                    ),
+                },
+                {
+                    "block_id": 2,
+                    "section_id": 1,
+                    "lang": "rst",
+                    "line_start": 6,
+                    "line_end": 9,
+                    "code": "Title\n~~~",
+                },
+                {
+                    "block_id": 3,
+                    "section_id": 2,
+                    "lang": "python",
+                    "line_start": 11,
+                    "line_end": 15,
+                    "code": "print(1)\n```trailing_text\n# comment inside fence",
+                },
+            ],
+        )
+
+    def test_tilde_block_wrapping_backtick_fences_and_trailing_text_in_t3_f4(
+        self,
+    ) -> None:
+        # H1: 3-backtick fence closed by 4-backtick fence, and 4-tilde RST underline inside
+        doc_h1_rst = Path(self.test_dir) / "h1_rst_f4_close.md"
+        doc_h1_rst.write_text(
+            "# Section 1\n```rst\nTest\n~~~~\n````\n# Section 2\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            [
+                s["heading"]
+                for s in self._query(f"SELECT heading FROM read_md_sections('{doc_h1_rst}');")
+            ],
+            ["Section 1", "Section 2"],
+        )
+        self.assertEqual(
+            self._query(
+                f"SELECT block_id, lang, line_start, line_end, code "
+                f"FROM read_md_code_blocks('{doc_h1_rst}');"
+            ),
+            [
+                {
+                    "block_id": 1,
+                    "lang": "rst",
+                    "line_start": 2,
+                    "line_end": 5,
+                    "code": "Test\n~~~~",
+                }
+            ],
+        )
+
+        # H3: Tilde fence wrapping an unpaired ``` line and a paired ```python ... ``` block
+        doc_unclosed = Path(self.test_dir) / "h3_unclosed.md"
+        doc_unclosed.write_text(
+            "# Before\n~~~text\n```\n~~~\n# After\n## Later\n",
+            encoding="utf-8",
+        )
+        sections = self._query(f"SELECT heading FROM read_md_sections('{doc_unclosed}');")
+        self.assertEqual([s["heading"] for s in sections], ["Before", "After", "Later"])
+
+        doc_closed = Path(self.test_dir) / "h3_closed.md"
+        doc_closed.write_text(
+            "# Before\n~~~markdown\n```python\n# comment\n```\n~~~\n# After\n",
+            encoding="utf-8",
+        )
+        blocks = self._query(
+            f"SELECT block_id, lang, line_start, line_end, code "
+            f"FROM read_md_code_blocks('{doc_closed}');"
+        )
+        self.assertEqual(
+            blocks,
+            [
+                {
+                    "block_id": 1,
+                    "lang": "markdown",
+                    "line_start": 2,
+                    "line_end": 6,
+                    "code": "```python\n# comment\n```",
+                }
+            ],
+        )
+
+        # H2: Tilde, 4-backtick, and 5-backtick fences with trailing text on inner lines
+        doc_h2 = Path(self.test_dir) / "h2_fences.md"
+        doc_h2.write_text(
+            "# Section 1\n"
+            "~~~markdown\n~~~sql\n# Fake Heading\n~~~\n"
+            "# Section 2\n"
+            "````markdown\n````python\n# comment in f4\n````\n"
+            "# Section 3\n"
+            "`````markdown\n`````python\n# comment in f5\n`````\n"
+            "# Section 4\n",
+            encoding="utf-8",
+        )
+        sections_h2 = self._query(f"SELECT heading FROM read_md_sections('{doc_h2}');")
+        self.assertEqual(
+            [s["heading"] for s in sections_h2],
+            ["Section 1", "Section 2", "Section 3", "Section 4"],
+        )
+        blocks_h2 = self._query(
+            f"SELECT block_id, lang, line_start, line_end, code "
+            f"FROM read_md_code_blocks('{doc_h2}');"
+        )
+        self.assertEqual(
+            blocks_h2,
+            [
+                {
+                    "block_id": 1,
+                    "lang": "markdown",
+                    "line_start": 2,
+                    "line_end": 5,
+                    "code": "~~~sql\n# Fake Heading",
+                },
+                {
+                    "block_id": 2,
+                    "lang": "markdown",
+                    "line_start": 7,
+                    "line_end": 10,
+                    "code": "````python\n# comment in f4",
+                },
+                {
+                    "block_id": 3,
+                    "lang": "markdown",
+                    "line_start": 12,
+                    "line_end": 15,
+                    "code": "`````python\n# comment in f5",
+                },
+            ],
+        )
+
+        # L1: BOM-only file and lone-\r line endings
+        bom_doc = Path(self.test_dir) / "bom_only.md"
+        bom_doc.write_text("\ufeff", encoding="utf-8")
+        self.assertEqual(self._query(f"SELECT * FROM read_md_sections('{bom_doc}');"), [])
+
+        cr_doc = Path(self.test_dir) / "cr_only.md"
+        cr_doc.write_bytes(b"---\rtitle: cr\r---\r# CR Heading\rBody\r")
+        self.assertEqual(
+            self._query(f"SELECT heading, line_start, line_end FROM read_md_sections('{cr_doc}');"),
+            [{"heading": "CR Heading", "line_start": 4, "line_end": 5}],
         )
 
     def test_multi_file_glob_and_preamble_only_file(self) -> None:
