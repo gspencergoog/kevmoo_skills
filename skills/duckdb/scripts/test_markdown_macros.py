@@ -172,6 +172,12 @@ class TestMarkdownMacros(unittest.TestCase):
             "    # indented shell comment\n"
             "    echo list\n"
             "    ```\n"
+            "`````markdown\n"
+            "# Fake Heading Inside 5-Backtick Block\n"
+            "````markdown\n"
+            "# Nested 4-Backtick Heading\n"
+            "````\n"
+            "`````\n"
         )
         doc_path = Path(self.test_dir) / "fences.md"
         doc_path.write_text(md_content, encoding="utf-8")
@@ -193,7 +199,7 @@ class TestMarkdownMacros(unittest.TestCase):
                     "section_id": 2,
                     "level": 2,
                     "heading": "Templates",
-                    "own_code_blocks": 3,
+                    "own_code_blocks": 4,
                 },
             ],
         )
@@ -251,6 +257,50 @@ class TestMarkdownMacros(unittest.TestCase):
                     "code_lines": 2,
                     "code": "    # indented shell comment\n    echo list",
                 },
+                {
+                    "block_id": 5,
+                    "section_id": 2,
+                    "section_heading": "Templates",
+                    "lang": "markdown",
+                    "line_start": 22,
+                    "line_end": 27,
+                    "code_lines": 4,
+                    "code": (
+                        "# Fake Heading Inside 5-Backtick Block\n"
+                        "````markdown\n"
+                        "# Nested 4-Backtick Heading\n"
+                        "````"
+                    ),
+                },
+            ],
+        )
+
+    def test_tilde_inside_backtick_and_closing_fence_with_trailing_text(
+        self,
+    ) -> None:
+        doc = Path(self.test_dir) / "edge_fences.md"
+        doc.write_text(
+            "# Section 1\n"
+            "```rst\n"
+            "Title\n"
+            "~~~\n"
+            "```\n"
+            "# Section 2\n"
+            "```python\n"
+            "print(1)\n"
+            "```trailing_text\n"
+            "# comment inside fence\n"
+            "```\n"
+            "# Section 3\n",
+            encoding="utf-8",
+        )
+        sections = self._query(f"SELECT section_id, heading FROM read_md_sections('{doc}');")
+        self.assertEqual(
+            sections,
+            [
+                {"section_id": 1, "heading": "Section 1"},
+                {"section_id": 2, "heading": "Section 2"},
+                {"section_id": 3, "heading": "Section 3"},
             ],
         )
 
@@ -259,7 +309,7 @@ class TestMarkdownMacros(unittest.TestCase):
         file_b = Path(self.test_dir) / "b.md"
         file_c = Path(self.test_dir) / "c_large.md"
         file_a.write_text("Just plain notes without any headings.\nLine two.\n", encoding="utf-8")
-        file_b.write_text("# Doc B\nSome content.\n", encoding="utf-8")
+        file_b.write_bytes(b"# Doc B\r\nSome CRLF content.\r\n")
         large_lines = [
             "---",
             "title: large-doc",
